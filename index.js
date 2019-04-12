@@ -17,6 +17,16 @@ if (!semver.minVersion(nodeVersion)) {
 (async () => {
   const browser = await puppeteer.launch({ headless: true });
   const page = await browser.newPage();
+  await page.setRequestInterception(true);
+  
+  page.on('request', (req) => {
+    if(req.resourceType() == 'stylesheet' || req.resourceType() == 'font' || req.resourceType() == 'image'){
+      req.abort();
+    } else {
+      req.continue();
+    }
+  });
+  
   await page.goto(BASE_URL);
 
   // Search for categories
