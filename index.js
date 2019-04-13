@@ -4,30 +4,36 @@ const semver = require('semver');
 const engines = require('./package').engines;
 const nodeVersion = engines.node;
 const moment = require('moment');
-const { writeFile } = require('./helpers');
+const { prepareCategoriesToExport, writeCSV } = require('./helpers');
 
 const BASE_URL = 'https://www.petropolis.bramilemcasa.com.br/';
 const startDate = moment.now();
+const SKIP_UNAVAILABLE = true;
 
 if (!semver.minVersion(nodeVersion)) {
   console.log(`NodeJS Version Check: Required node version ${nodeVersion} NOT SATISFIED with current version ${process.version}.`);
   process.exit(1);
 }
 
-async function extractedEvaluateCall(page) {
-  return page.evaluate(() => {
+async function extractProductDetail(page, SKIP_UNAVAILABLE, category) {
+  const selector = SKIP_UNAVAILABLE ? `.vip-products .product .thumbnail:not(.produto-indisponivel) .description:nth-child(1) a` : '.vip-products .product div .description:nth-child(1) a';
+
+  return page.evaluate((selector, category) => {
     let productsHolder = [];
-    document.querySelectorAll('.vip-products .product .description:nth-child(1) a').forEach(product => {
+
+    document.querySelectorAll(selector).forEach(product => {
       let productJson = {};
       try {
         productJson.name = product.getAttribute('title');
+        productJson.url = product.getAttribute('href');
+        productJson.category =category;
       } catch (error) {
         console.log(error);
       }
       productsHolder.push(productJson);
     });
     return productsHolder;
-  });
+  }, selector, category);
 }
 
 (async () => {
@@ -45,7 +51,7 @@ async function extractedEvaluateCall(page) {
   });
   
   await page.goto(BASE_URL);
-  await page.waitFor(1000);
+  await page.waitFor(1500);
 
   // Search for categories
   console.log('Searching for categories...');
@@ -66,19 +72,16 @@ async function extractedEvaluateCall(page) {
     return categories;
   });
 
-  // console.log(categoriesData);
-  // writeFile('Categories', categoriesData);
-
   // Search for subcategories
   console.log('Searching for subcategories...');
   let subcategories = []; 
   // for (let category of categoriesData) {
-    for (let i = 0; i < 1; i++) {
+    for (let i = 0; i < 2; i++) {
       let category = categoriesData[i];
     console.log(`Visiting category: ${category.name}`);
 
     await page.goto(category.url);
-    await page.waitFor(3000);
+    await page.waitFor(1500);
 
     let subcategoryData = await page.evaluate((category) => {
       let subcategoriesHolder = {
@@ -103,8 +106,7 @@ async function extractedEvaluateCall(page) {
     subcategories.push(subcategoryData);
   }
 
-  // console.log(subcategories[0].subcategories); SAVE ON FILE
-
+  prepareCategoriesToExport('categories.csv', subcategories);
 
   // Search for products
   console.log('Searching for products...');
@@ -113,9 +115,10 @@ async function extractedEvaluateCall(page) {
   for (let i = 0; i < 1; i++) {
     let category = subcategories[i];
     // for (let subcategory of category.subcategories) {
-    for (let j = 0; i < 1; i++) {
+    for (let j = 0; j < 1; j++) {
       let subcategory = category.subcategories[j];
       let currentPage = 1;
+
       console.log(`Visiting subcategory: ${subcategory.name}`);
 
       await page.goto(subcategory.url);
@@ -123,13 +126,11 @@ async function extractedEvaluateCall(page) {
 
       let totalPages = await page.evaluate(() => {
         let text = document.querySelector('.pagination').nextElementSibling.innerHTML.trim();
-        // return parseInt(text.split(',')[0].split('de ')[1]);
-        return 2
+        return parseInt(text.split(',')[0].split('de ')[1]);
       });
 
-
       while (currentPage <= totalPages) {
-        let newUrls = await extractedEvaluateCall(page);
+        let newUrls = await extractProductDetail(page, SKIP_UNAVAILABLE, subcategory.name);
         products = products.concat(newUrls);
 
         if (currentPage < totalPages) {
@@ -140,39 +141,38 @@ async function extractedEvaluateCall(page) {
       }
     }
   }
-  console.log(products);
-  // for (let subcategory of subcategories[0].subcategories) {
-  //   console.log(`Visiting subcategory: ${subcategory.name}`);
 
+  // Get product details
+  console.log('Getting products detail');
+  const allProducts = [];
+  for (let product of products) {
+  // for (let i = 0; i < 2; i++) {
+  //   const product = products[i];
+    console.log(`Visiting product: ${product.name}`);
 
+    await page.goto(BASE_URL + product.url);
+    await page.waitFor(1500);
 
-    // await page.goto(BASE_URL + category.url);
-    // await page.waitFor(3000);
-    // await page.screenshot({ path: 'example.png' });
+    let productDetailData = await page.evaluate((product) => {
+      return productDetailJson = {
+        name: product.name,
+        value: parseFloat(document.querySelector('#product .info-price').innerHTML.split('<')[0].split('R$ ')[1].replace(',', '.')) || null,
+        image: document.querySelector('#product .img-link img').src || null,
+        description: document.querySelector('#product .description').textContent.trim() || null
+      };
+    }, product);
 
-    // let productData = await page.evaluate(() => {
-    //   let productJson = {};  
-    //   document.querySelectorAll('article.product_pod').forEach(product => {
-    //     try {
-    //       productJson.name = product.children[2].firstElementChild.getAttribute('title');
-    //       productJson.image = product.firstElementChild.firstElementChild.firstElementChild.src;
-    //       productJson.value = parseFloat(product.lastElementChild.firstElementChild.innerHTML.split('£')[1]);
-    //     } catch (error) {
-    //       console.log(error);
-    //     }
-    //   });
-    //   return productJson;
-    // });
+    allProducts.push(productDetailData);
+  }
 
-    // products.push(productData);
-  // }
-  // writeFile('Products', products);
+  writeCSV('products.csv', allProducts);
   
-  // const endDate = moment.now();
-  // const diff = moment(endDate).diff(moment(startDate), 'minutes', true);
+  const endDate = moment.now();
+  const diff = moment(endDate).diff(moment(startDate), 'minutes', true);
 
-  // console.log('Crawling finished!');
-  // console.log(`Time lapse: ${Math.round(diff * 100) / 100} minutes`);
+  console.log('Crawling finished!');
+  console.log(`Products exported: ${allProducts.length}`);
+  console.log(`Time lapse: ${Math.round(diff * 100) / 100} minutes`);
   
   browser.close();
 })();
